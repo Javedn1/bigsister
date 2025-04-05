@@ -37,52 +37,58 @@ audio_queue = queue.Queue()
 result_queue = queue.Queue()
 
 # Function to capture video frames
-def capture_video():
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("Error: Could not open camera.")
-        return
-    
+def capture_video(display_queue, video_queue, stop_event):
+    # Removed camera init
     try:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                print("Failed to grab frame")
-                break
+        while not stop_event.is_set():
+            try:
+                frame = display_queue.get(timeout=0.5) # Wait briefly for a frame
+                if frame is None: # Check for sentinel value
+                    break
                 
-            # Display the frame
-            cv2.imshow("Camera Feed", frame)
+                # Add frame to processing queue (downsize for efficiency)
+                small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
+                video_queue.put(small_frame)
             
-            # Add frame to processing queue (downsize for efficiency)
-            small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
-            video_queue.put(small_frame)
-            
-            # Break loop on 'q' key
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-            
-            time.sleep(0.1)  # Reduce frame rate for processing
+            except queue.Empty:
+                # If queue is empty, loop back and check stop_event again
+                continue
+
     finally:
-        cap.release()
-        cv2.destroyAllWindows()
+        print("Capture video thread finished.")
+        # Removed cap.release()
 
 # Function to record audio using VAD
-def record_audio():
+def record_audio(audio_queue, stop_event):
     audio = pyaudio.PyAudio()
     vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
     
-    stream = audio.open(format=FORMAT, channels=CHANNELS,
-                       rate=RATE, input=True,
-                       frames_per_buffer=CHUNK_SIZE)
-    
-    print("Listening for speech...")
-    frames_buffer = []
-    silence_counter = 0
-    is_speaking = False
-    
-    try:
-        while True:
-            data = stream.read(CHUNK_SIZE)
+    try: # Added try-finally for resource cleanup
+        stream = audio.open(format=FORMAT, channels=CHANNELS,
+                           rate=RATE, input=True,
+                           frames_per_buffer=CHUNK_SIZE)
+        
+        print("Listening for speech...")
+        frames_buffer = []
+        silence_counter = 0
+        is_speaking = False
+        
+        while not stop_event.is_set(): # Check stop event
+            try:
+                # Use non-blocking read with timeout to allow checking stop_event
+                data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
+            except IOError as e:
+                 # Handle input overflow gracefully if it occurs
+                 if e.errno == pyaudio.paInputOverflowed:
+                     print("Warning: Audio input overflowed. Skipping chunk.")
+                     data = None
+                 else:
+                     raise # Re-raise other IOErrors
+
+            if data is None: # Skip if overflow occurred
+                time.sleep(0.01) # Short sleep to prevent busy-waiting
+                continue
+
             try:
                 is_speech = vad.is_speech(data, RATE)
             except Exception as vad_error:
@@ -96,13 +102,11 @@ def record_audio():
                     print("Speech detected...")
                     is_speaking = True
             elif is_speaking:
-                # Still append some silence frames after speech ends
                 frames_buffer.append(data)
                 silence_counter += 1
                 if silence_counter > SILENCE_THRESHOLD_FRAMES:
                     print(f"Silence detected, processing segment ({len(frames_buffer) * CHUNK_DURATION_MS / 1000:.2f}s)...")
                     if len(frames_buffer) > MIN_SPEECH_FRAMES:
-                        # Save temporary audio file
                         temp_audio_path = TEMP_DIR / f"audio_{time.time()}.wav"
                         wf = wave.open(str(temp_audio_path), 'wb')
                         wf.setnchannels(CHANNELS)
@@ -110,57 +114,51 @@ def record_audio():
                         wf.setframerate(RATE)
                         wf.writeframes(b''.join(frames_buffer))
                         wf.close()
-                        
-                        # Add to processing queue
                         audio_queue.put(str(temp_audio_path))
                     else:
                         print("Segment too short, discarding.")
-                    
-                    # Reset for next segment
                     frames_buffer = []
                     silence_counter = 0
                     is_speaking = False
                     print("Listening for speech...")
-            # else: # Silence while not speaking, do nothing
-            #     pass 
+            
+            # Add a small sleep if VAD logic didn't run to prevent busy-waiting
+            # (This might not be strictly necessary with stream.read timeout)
+            # time.sleep(0.01) 
 
     finally:
-        stream.stop_stream()
-        stream.close()
+        print("Record audio thread finished.")
+        if 'stream' in locals() and stream.is_active():
+            stream.stop_stream()
+            stream.close()
         audio.terminate()
 
 # Function to process media with Gemini
-def process_media():
+def process_media(video_queue, audio_queue, result_queue, stop_event):
     # Initialize Gemini model
-    # Check if model exists before initializing - Added check
+    model = None # Initialize model to None
     try:
         model = genai.GenerativeModel('gemini-2.0-flash')
     except Exception as model_init_error:
         print(f"Error initializing Gemini model: {model_init_error}")
-        print("Please ensure your API key is valid and the model name is correct.")
-        # Add the result to the queue to signal the error to the display thread
         result_queue.put(f"FATAL ERROR: Could not initialize Gemini model: {model_init_error}")
-        return # Stop the processing thread if model fails to load
+        return # Stop thread
 
-    while True:
+    while not stop_event.is_set(): # Check stop event
+        processed_something = False
         try:
-            # Get latest frame and audio if available
-            if not video_queue.empty():
-                frame = video_queue.get()
-                
-                # Save temporary image
+            # Check video queue with timeout
+            try:
+                frame = video_queue.get(timeout=0.1) 
+                # --- Process frame (mostly unchanged) ---
                 temp_img_path = TEMP_DIR / f"frame_{time.time()}.jpg"
                 cv2.imwrite(str(temp_img_path), frame)
-                
-                # Process image with Gemini
                 with open(temp_img_path, 'rb') as f:
                     image_data = f.read()
-                
-                # Generate content safely - Added error handling
                 try:
                     response = model.generate_content([
-                        "Describe what you see in this image, focusing on any text, people, or important elements.",
-                        {'mime_type': 'image/jpeg', 'data': image_data} # Use dictionary format
+                        "Describe what you see in this image...", # Shortened for brevity
+                        {'mime_type': 'image/jpeg', 'data': image_data}
                     ])
                     result_queue.put(f"Visual analysis: {response.text}")
                 except InvalidArgument as e:
@@ -168,29 +166,42 @@ def process_media():
                 except Exception as e:
                     result_queue.put(f"Image Processing error: {str(e)}")
                 finally:
-                    # Clean up temp file
-                    try: # Added try-except for unlink
+                    try: 
                         temp_img_path.unlink()
                     except OSError as unlink_error:
                         print(f"Error deleting temp image file {temp_img_path}: {unlink_error}")
+                processed_something = True
+                # --- End frame processing ---
+            except queue.Empty:
+                pass # No frame, continue to check audio
             
-            # Process audio if available
-            if not audio_queue.empty():
-                audio_path = audio_queue.get()
-                
-                # Process audio with Gemini
-                # Use UploadedFile API for better handling
+            # Check audio queue with timeout
+            try:
+                audio_path = audio_queue.get(timeout=0.1) 
+                # --- Process audio (mostly unchanged) ---
                 try:
                     print(f"Uploading audio file: {audio_path}")
                     audio_file = genai.upload_file(path=audio_path)
+                    # ... (rest of audio processing, file state check, generate, delete) ...
                     print(f"Audio file uploaded successfully: {audio_file.name}")
-
-                    # Wait for file processing if needed (usually fast)
                     while audio_file.state.name == "PROCESSING":
+                        # Check stop event while waiting for upload processing
+                        if stop_event.is_set(): 
+                            print("Stop event during audio upload processing.")
+                            # Attempt to clean up the uploaded file if possible
+                            try: genai.delete_file(audio_file.name)
+                            except Exception: pass 
+                            break # Exit inner loop
                         print('.', end='')
                         time.sleep(1)
-                        audio_file = genai.get_file(audio_file.name)
+                        try: # Add try/except for get_file during shutdown
+                           audio_file = genai.get_file(audio_file.name)
+                        except Exception as get_file_err:
+                            print(f"\nError checking audio file status during wait: {get_file_err}")
+                            break # Exit inner loop
                     
+                    if stop_event.is_set(): break # Exit outer loop if stopped
+
                     if audio_file.state.name == "FAILED":
                          raise Exception(f"Audio file processing failed: {audio_file.state.name}")
 
@@ -199,42 +210,64 @@ def process_media():
                         "Transcribe and summarize what is being said in this audio.",
                         audio_file
                     ])
-                    
                     result_queue.put(f"Audio analysis: {response.text}")
-                    
-                    # Clean up uploaded file on API side
                     genai.delete_file(audio_file.name)
                     print(f"Deleted uploaded file: {audio_file.name}")
-
                 except InvalidArgument as e:
                     result_queue.put(f"API Audio Error: {str(e)}")
                 except Exception as e:
                     result_queue.put(f"Audio Processing error: {str(e)}")
                 finally:
-                     # Clean up local temp file
-                    try: # Added try-except for unlink
+                    try: 
                         Path(audio_path).unlink()
                         print(f"Deleted local temp file: {audio_path}")
                     except OSError as unlink_error:
                         print(f"Error deleting temp audio file {audio_path}: {unlink_error}")
+                processed_something = True
+                # --- End audio processing ---
+            except queue.Empty:
+                pass # No audio, continue
             
-            time.sleep(0.2)  # Slightly shorter pause 
+            # If neither queue had data, sleep briefly to prevent busy-waiting
+            if not processed_something:
+                time.sleep(0.1)
             
         except Exception as e:
-            # Catch potential errors in the main loop of process_media
             result_queue.put(f"General processing loop error: {str(e)}")
-            time.sleep(1) # Pause before retrying
+            time.sleep(1) 
+    
+    print("Process media thread finished.")
 
 # Function to display results
-def display_results():
-    while True:
-        if not result_queue.empty():
-            result = result_queue.get()
+def display_results(result_queue, stop_event):
+    while not stop_event.is_set(): # Check stop event
+        try:
+            result = result_queue.get(timeout=0.5) # Check queue with timeout
             print("\n" + "="*50)
             print(result)
             print("="*50)
-        
-        time.sleep(0.5)
+        except queue.Empty:
+            # If queue is empty and stop event is set, exit the loop
+            if stop_event.is_set():
+                break
+            else:
+                continue # Otherwise, keep waiting
+        except Exception as e:
+            print(f"Error displaying result: {e}") # Handle potential errors during print
+
+    # Process any remaining items in the queue after stop signal
+    print("Display results thread draining final queue...")
+    while not result_queue.empty():
+        try:
+            result = result_queue.get_nowait()
+            print("\n" + "="*50 + " (Final)")
+            print(result)
+            print("="*50)
+        except queue.Empty:
+            break
+        except Exception as e:
+            print(f"Error displaying final result: {e}")
+    print("Display results thread finished.")
 
 def main():
     if not API_KEY:
@@ -242,35 +275,113 @@ def main():
         return
     
     print("Starting Gemini Camera Analysis")
-    print("Press 'q' in the camera window to quit")
+    print("Press 'q' in the camera window to quit (or Ctrl+C in terminal)")
+
+    # Create stop event and queues
+    stop_event = threading.Event()
+    display_queue = queue.Queue(maxsize=1) # Queue for frames to pass to capture_video thread
     
+    # Open Camera in main thread
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("Error: Could not open camera.")
+        return
+
     # Start threads
     threads = [
-        threading.Thread(target=capture_video, daemon=True),
-        threading.Thread(target=record_audio, daemon=True),
-        threading.Thread(target=process_media, daemon=True),
-        threading.Thread(target=display_results, daemon=True)
+        threading.Thread(target=capture_video, args=(display_queue, video_queue, stop_event), daemon=True),
+        threading.Thread(target=record_audio, args=(audio_queue, stop_event), daemon=True),
+        threading.Thread(target=process_media, args=(video_queue, audio_queue, result_queue, stop_event), daemon=True),
+        threading.Thread(target=display_results, args=(result_queue, stop_event), daemon=True)
     ]
     
     for thread in threads:
         thread.start()
     
     try:
-        # Keep main thread alive
-        threads[0].join()
-    except KeyboardInterrupt:
-        print("\nExiting...")
-    finally:
-        # Clean up any temporary files
-        for file in TEMP_DIR.glob("*"):
+        # Main loop: Read frame, display, pass to thread, check key
+        while not stop_event.is_set():
+            ret, frame = cap.read()
+            if not ret:
+                print("Failed to grab frame from camera. Exiting.")
+                break
+
+            # Display the frame (Main Thread)
             try:
-                file.unlink()
-            except:
+                cv2.imshow("Camera Feed", frame)
+            except cv2.error as e:
+                # Don't crash if display fails, but log it
+                print(f"Warning: cv2.imshow error: {e}")
+                # Consider stopping if display consistently fails?
+
+            # Put frame in queue for capture_video thread (if queue not full)
+            try:
+                display_queue.put_nowait(frame)
+            except queue.Full:
+                # This shouldn't happen often with maxsize=1 if capture_video is running
+                # If it does, maybe drop frame or use put with timeout
+                # print("Warning: Display queue full, dropping frame for capture thread.")
                 pass
+
+            # Check for 'q' key press (Main Thread)
+            key_pressed = -1
+            try:
+                # WaitKey needs a small delay to process window events
+                key_pressed = cv2.waitKey(1) 
+            except cv2.error as e:
+                print(f"Warning: cv2.waitKey error: {e}")
+                # If waitKey fails, we might not be able to quit with 'q'
+
+            if key_pressed & 0xFF == ord('q'):
+                print("'q' pressed, initiating shutdown...")
+                break # Exit main loop
+                
+    except KeyboardInterrupt:
+        print("\nCtrl+C detected, initiating shutdown...")
+    finally:
+        # Signal threads to stop
+        print("Setting stop event...")
+        stop_event.set()
+
+        # Put a sentinel value in display_queue to unblock capture_video thread get()
         try:
-            TEMP_DIR.rmdir()
-        except:
-            pass
+            display_queue.put_nowait(None)
+        except queue.Full:
+            pass # If full, thread is likely blocked elsewhere or already stopping
+        
+        # Release camera and destroy window (Main Thread)
+        print("Releasing camera...")
+        cap.release()
+        print("Destroying OpenCV windows...")
+        try:
+            cv2.destroyAllWindows()
+        except cv2.error as e:
+             print(f"Warning: cv2.destroyAllWindows error: {e}")
+        
+        # Wait for all threads to finish
+        print("Waiting for threads to finish...")
+        for thread in threads:
+            thread.join(timeout=5.0) # Add timeout to join
+            if thread.is_alive():
+                 print(f"Warning: Thread {thread.name} did not finish cleanly.")
+
+        # Clean up any temporary files
+        print("Cleaning up temporary files...")
+        # Check if TEMP_DIR exists before cleaning up
+        if TEMP_DIR.exists():
+            for file in TEMP_DIR.glob("*"):
+                try:
+                    file.unlink()
+                except OSError as e:
+                    print(f"Error removing temp file {file}: {e}") 
+            try:
+                TEMP_DIR.rmdir()
+            except OSError as e:
+                 print(f"Error removing temp dir {TEMP_DIR}: {e}")
+        else:
+            print(f"Temporary directory {TEMP_DIR} not found, skipping cleanup.")
+            
+        print("Application finished.")
 
 if __name__ == "__main__":
     main() 
