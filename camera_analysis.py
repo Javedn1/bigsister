@@ -25,6 +25,8 @@ tts_config = TTSConfig(
 )
 
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+# Initialize face recognizer (LBPH)
+recognizer = cv2.face.LBPHFaceRecognizer_create()
 
 # Configuration
 API_KEY = os.environ.get("GOOGLE_API_KEY")  # Set your API key as an environment variable
@@ -285,10 +287,50 @@ def display_results(result_queue, stop_event):
             print(f"Error displaying final result: {e}")
     print("Display results thread finished.")
 
+
+def train_recognizer():
+    faces = []
+    labels = []
+    label_counter = 0
+    # Loop through all images in the 'faces' directory
+    for filename in os.listdir('faces'):
+        if filename.endswith('.jpg'):
+            img_path = os.path.join('faces', filename)
+            img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+            label = int(filename.split('_')[0])  # Extract label (ID) from filename (e.g., 1_face1.jpg)
+            faces.append(img)
+            labels.append(label)
+    # Train the recognizer
+    recognizer.train(faces, np.array(labels))
+    recognizer.save('face_trainer.yml')  # Save the trained model for later use
+    print('Recognizer trained and saved.')
+
+def recognize_face(frame, recognizer):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+    
+    for (x, y, w, h) in faces:
+        roi_gray = gray[y:y+h, x:x+w]
+        id_, confidence = recognizer.predict(roi_gray)
+
+        if confidence < 100:
+            label = f"Person {id_} ({round(100 - confidence, 2)}%)"
+        else:
+            label = "Unknown"
+        
+        # Draw rectangle around face and label it
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+        cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+    
+    return frame
+
 def main():
     if not API_KEY:
         print("Error: Google API Key not found. Please set the GOOGLE_API_KEY environment variable.")
         return
+    
+    train_recognizer()
+    recognizer.read('face_trainer.yml')
     
     print("Starting Gemini Camera Analysis")
     print("Press 'q' in the camera window to quit (or Ctrl+C in terminal)")
