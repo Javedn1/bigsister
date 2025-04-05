@@ -26,7 +26,7 @@ tts_config = TTSConfig(
 
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 # Initialize face recognizer (LBPH)
-recognizer = cv2.face.LBPHFaceRecognizer_create()
+#recognizer = cv2.face.LBPHFaceRecognizer_create()
 
 # Configuration
 API_KEY = os.environ.get("GOOGLE_API_KEY")  # Set your API key as an environment variable
@@ -287,7 +287,7 @@ def display_results(result_queue, stop_event):
             print(f"Error displaying final result: {e}")
     print("Display results thread finished.")
 
-
+"""
 def train_recognizer():
     faces = []
     labels = []
@@ -301,8 +301,8 @@ def train_recognizer():
             faces.append(img)
             labels.append(label)
     # Train the recognizer
-    recognizer.train(faces, np.array(labels))
-    recognizer.save('face_trainer.yml')  # Save the trained model for later use
+    #recognizer.train(faces, np.array(labels))
+    #recognizer.save('face_trainer.yml')  # Save the trained model for later use
     print('Recognizer trained and saved.')
 
 def recognize_face(frame, recognizer):
@@ -323,14 +323,15 @@ def recognize_face(frame, recognizer):
         cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
     
     return frame
-
+"""
+    
 def main():
     if not API_KEY:
         print("Error: Google API Key not found. Please set the GOOGLE_API_KEY environment variable.")
         return
     
-    train_recognizer()
-    recognizer.read('face_trainer.yml')
+    #train_recognizer()
+    #recognizer.read('face_trainer.yml')
     
     print("Starting Gemini Camera Analysis")
     print("Press 'q' in the camera window to quit (or Ctrl+C in terminal)")
@@ -371,7 +372,7 @@ def main():
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 faces = face_cascade.detectMultiScale(gray, 1.3, 5)
                 # Loop through each face found
-                """
+                
                 for (x, y, w, h) in faces:
                     # Draw rectangle around face
                     cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
@@ -391,7 +392,7 @@ def main():
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                     
                     cv2.imshow('Face', face)
-                    """
+                    
 
             except cv2.error as e:
                 # Don't crash if display fails, but log it
