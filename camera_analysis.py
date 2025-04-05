@@ -14,9 +14,10 @@ import json
 
 
 client = Neuphonic('42ab0121289216df4abf58f9640c711ac2e1de42845bee6b1a619ffd082da9c2.ef521e59-89e4-4e1c-835c-2989af341bff')
-sse = client.tts.SSEClient()
 
+sse = client.tts.SSEClient()
 tts_config = TTSConfig(
+    speed=1.2,
     lang_code='en',
     sampling_rate=22050,
 )
@@ -179,12 +180,12 @@ def display_results(result_queue, stop_event):
             print(result)
 
             
-            threading.Thread(target=talk, args=(result,), daemon=True).start()
+            threading.Thread(target    =talk, args=(result,), daemon=True).start()
 
             #with AudioPlayer(sampling_rate=22050) as player:
             #     response = sse.send(result, tts_config=tts_config)
             #     player.play(response)
-            print("="*50)
+            #print("="*50)
         except queue.Empty:
             # If queue is empty and stop event is set, exit the loop
             if stop_event.is_set():
