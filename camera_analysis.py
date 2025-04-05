@@ -10,7 +10,7 @@ import threading
 import tempfile
 from pyneuphonic import Neuphonic, TTSConfig
 from pyneuphonic.player import AudioPlayer
-
+import json
 
 
 client = Neuphonic('42ab0121289216df4abf58f9640c711ac2e1de42845bee6b1a619ffd082da9c2.ef521e59-89e4-4e1c-835c-2989af341bff')
@@ -102,6 +102,7 @@ def process_media(video_queue, result_queue, stop_event):
                     prompt = """Generate a JSON object containing exactly two keys: "name" and "action".
 
 - The value for the "name" key should be a string representing the main person or object detected in the image. If multiple are present, focus on the most prominent one.
+- Use the primary of what the person is wearing for now e.g blue, red
 - The value for the "action" key should be a string describing what the identified person or object is doing.
 - There is two person you need to identify and describe their actions within the frame. A is in red and B is in blue.
 
@@ -109,18 +110,18 @@ Provide only the JSON object as the output, with no additional text before or af
 
 Example:
 {
-  "name": "A",
+  "name": "blue",
   "action": "drink"
 },
 {
-  "name": "B",
+  "name": "red",
   "action": "using phone"
 }
 
 The only actions you can describe are:
 - drinking
 - using phone
-- lookging sad
+- looking sad
 
 If their action do not match any of the above, describe it as "HAPPY"
 
@@ -150,6 +151,25 @@ Now, generate the JSON based on the provided image.
 
     print("Process media thread finished.")
 
+def talk(text):
+    try:
+
+        if "drinking" in text:
+            message = "stop drinking"
+        if "using phone" in text:
+            message = "stop using your phone!"
+        if "looking sad" in text:
+            message = "stop looking sad!"
+
+
+        with AudioPlayer(sampling_rate=22050) as player:
+                response = sse.send(message, tts_config=tts_config)
+                player.play(response)
+    except Exception as e:
+        print("error")
+
+    
+
 # Function to display results
 def display_results(result_queue, stop_event):
     while not stop_event.is_set(): # Check stop event
@@ -157,7 +177,11 @@ def display_results(result_queue, stop_event):
             result = result_queue.get(timeout=0.5) # Check queue with timeout
             print("\n" + "="*50)
             print(result)
-            # with AudioPlayer(sampling_rate=22050) as player:
+
+            
+            threading.Thread(target=talk, args=(result,), daemon=True).start()
+
+            #with AudioPlayer(sampling_rate=22050) as player:
             #     response = sse.send(result, tts_config=tts_config)
             #     player.play(response)
             print("="*50)
@@ -210,7 +234,7 @@ def main():
     threads = [
         threading.Thread(target=capture_video, args=(display_queue, video_queue, stop_event), daemon=True),
         threading.Thread(target=process_media, args=(video_queue, result_queue, stop_event), daemon=True),
-        threading.Thread(target=display_results, args=(result_queue, stop_event), daemon=True)
+        threading.Thread(target=display_results, args=(result_queue, stop_event), daemon=True),
     ]
     
     for thread in threads:
