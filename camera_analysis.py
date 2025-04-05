@@ -12,6 +12,7 @@ from pyneuphonic import Neuphonic, TTSConfig
 from pyneuphonic.player import AudioPlayer
 import json
 
+import face_recognition
 
 client = Neuphonic('42ab0121289216df4abf58f9640c711ac2e1de42845bee6b1a619ffd082da9c2.ef521e59-89e4-4e1c-835c-2989af341bff')
 
@@ -23,6 +24,21 @@ tts_config = TTSConfig(
 )
 
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+social_score = {}
+social_score['blue'] = 100
+social_score['red'] = 100
+
+image_of_person  = face_recognition.load_image_file("marcus.jpg")
+marcus_encoding = face_recognition.face_encodings(image_of_person)[0]
+
+known_face_encodings = [marcus_encoding]
+konwn_face_names = ["Marcus"]
+
+
+
+BLUE_ON_SCREEN = False
+RED_ON_SCREEN = False
 
 # Configuration
 API_KEY = os.environ.get("GOOGLE_API_KEY")  # Set your API key as an environment variable
@@ -42,7 +58,7 @@ def capture_video(display_queue, video_queue, stop_event):
     try:
         while not stop_event.is_set():
             try:
-                frame = display_queue.get(timeout=0.5) # Wait briefly for a frame
+                frame = display_queue.get(timeout=2.5) # Wait briefly for a frame
                 if frame is None: # Check for sentinel value
                     break
                 
@@ -110,15 +126,18 @@ def process_media(video_queue, result_queue, stop_event):
 Provide only the JSON object as the output, with no additional text before or after it.
 
 Example:
-{
-  "name": "blue",
-  "action": "drink"
-},
-{
-  "name": "red",
-  "action": "using phone"
-}
+[
+    {
+        "name": "blue",
+        "action": "drink"
+    },
+    {
+        "name": "red",
+        "action": "using phone"
+    }
+]
 
+This is an example if there is two people on camera
 The only actions you can describe are:
 - drinking
 - using phone
@@ -154,38 +173,47 @@ Now, generate the JSON based on the provided image.
 
 def talk(text):
     try:
+        if(text):
+            print("HERERE")
+            text = text.strip("```json\n").strip("```")
+            data = json.loads(text)
+            message = ""
+            for entry in data:
+                name = entry.get("name")
+                action = entry.get("action")
+                if(name == "blue" or name == "red"):
+                    if(action == "drinking"):
+                        message = "stop drinking!"
+                        social_score[name] -= 10
+                    if(action == "using phone"):
+                        message = "stop using your phone!"
+                        social_score[name] -= 10
+                    if(action == "looking sad"):
+                        message = "stop looking sad"
+                        social_score[name] -= 10
+                    if(name == "blue"):
+                        BLUE_ON_SCREEN = True
+                    if(name == "red"):
+                        RED_ON_SCREEN = True
+            with AudioPlayer(sampling_rate=22050) as player:
+                    response = sse.send(message, tts_config=tts_config)
+                    player.play(response)
 
-        if "drinking" in text:
-            message = "stop drinking"
-        if "using phone" in text:
-            message = "stop using your phone!"
-        if "looking sad" in text:
-            message = "stop looking sad!"
-
-
-        with AudioPlayer(sampling_rate=22050) as player:
-                response = sse.send(message, tts_config=tts_config)
-                player.play(response)
     except Exception as e:
-        print("error")
-
+        print(str(e))
     
 
 # Function to display results
 def display_results(result_queue, stop_event):
     while not stop_event.is_set(): # Check stop event
         try:
-            result = result_queue.get(timeout=0.5) # Check queue with timeout
+            result = result_queue.get(timeout=1) # Check queue with timeout
             print("\n" + "="*50)
             print(result)
 
             
-            threading.Thread(target    =talk, args=(result,), daemon=True).start()
+            threading.Thread(target=talk, args=(result,), daemon=True).start()
 
-            #with AudioPlayer(sampling_rate=22050) as player:
-            #     response = sse.send(result, tts_config=tts_config)
-            #     player.play(response)
-            #print("="*50)
         except queue.Empty:
             # If queue is empty and stop event is set, exit the loop
             if stop_event.is_set():
@@ -266,7 +294,7 @@ def main():
                     face = frame[y:y + h, x:x + w]
 
                     # Optional: Draw something above the head (label)
-                    label_text = "-1000rr"
+                    label_text = str(social_score["blue"])
                     label_y = max(20, y - 20)  # Ensure it's not off-screen
 
                     # Draw a filled rectangle for label background (optional)
@@ -332,7 +360,7 @@ def main():
         # Wait for all threads to finish
         print("Waiting for threads to finish...")
         for thread in threads:
-            thread.join(timeout=5.0) # Add timeout to join
+            thread.join(timeout=2.5) # Add timeout to join
             if thread.is_alive():
                  print(f"Warning: Thread {thread.name} did not finish cleanly.")
 
