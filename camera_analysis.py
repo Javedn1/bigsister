@@ -12,6 +12,8 @@ import tempfile
 import queue
 import webrtcvad # Added for VAD
 
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
 # Configuration
 API_KEY = os.environ.get("GOOGLE_API_KEY")  # Set your API key as an environment variable
 TEMP_DIR = Path(tempfile.gettempdir()) / "gemini_camera_analysis"
@@ -50,6 +52,26 @@ def capture_video(display_queue, video_queue, stop_event):
                 small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
                 video_queue.put(small_frame)
             
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+
+                for (x, y, w, h) in faces:
+                    # Draw rectangle around face
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+
+                    # Draw something above the head
+                    label_text = "-10000 social credit"
+                    label_y = max(0, y - 20)  # ensure it's not off-screen
+
+                    # Draw a filled rectangle for label background (optional)
+                    cv2.rectangle(frame, (x, label_y - 20), (x + w, label_y), (0, 0, 0), -1)
+
+                    # Draw label
+                    cv2.putText(frame, label_text, (x + 5, label_y - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                # Only show one window now
+                cv2.imshow('Face + Above Head Drawing', frame)
+
             except queue.Empty:
                 # If queue is empty, loop back and check stop_event again
                 continue
