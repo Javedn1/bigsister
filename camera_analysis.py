@@ -15,7 +15,7 @@ from pyneuphonic import Neuphonic, TTSConfig
 from pyneuphonic.player import AudioPlayer
 
 
-client = Neuphonic('api-key')
+client = Neuphonic('tts')
 sse = client.tts.SSEClient()
 
 tts_config = TTSConfig(
@@ -58,6 +58,30 @@ def capture_video(display_queue, video_queue, stop_event):
                 frame = display_queue.get(timeout=0.5) # Wait briefly for a frame
                 if frame is None: # Check for sentinel value
                     break
+
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+
+                # Loop through each face found
+                #for (x, y, w, h) in faces:
+                #    # Draw rectangle around face
+                #    cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+
+                    # Optional: Add facial recognition logic here
+                    # You could compare the face against a pre-existing dataset of faces if you want to recognize faces.
+
+                    # Draw something above the head (label)
+                #    label_text = "Face detected"
+                #    label_y = max(0, y - 20)  # ensure it's not off-screen
+
+                    # Draw a filled rectangle for label background (optional)
+                #    cv2.rectangle(frame, (x, label_y - 20), (x + w, label_y), (0, 0, 0), -1)
+
+                    # Draw label (text)
+                #    cv2.putText(frame, label_text, (x + 5, label_y - 5),
+                #                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                    
+                #    cv2.imshow("test", frame)
 
                 # Add frame to processing queue (downsize for efficiency)
                 small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
@@ -153,7 +177,7 @@ def process_media(video_queue, audio_queue, result_queue, stop_event):
         model = genai.GenerativeModel('gemini-2.0-flash')
     except Exception as model_init_error:
         print(f"Error initializing Gemini model: {model_init_error}")
-        result_queue.put(f"FATAL ERROR: Could not initialize Gemini model: {model_init_error}")
+        result_queue.put(f"FATAL ERROR: Could not initialize Gemini model: {model_init_error}")#
         return # Stop thread
 
     while not stop_event.is_set(): # Check stop event
