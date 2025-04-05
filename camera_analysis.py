@@ -14,8 +14,9 @@ import webrtcvad # Added for VAD
 from pyneuphonic import Neuphonic, TTSConfig
 from pyneuphonic.player import AudioPlayer
 
+#remembering faces
 
-client = Neuphonic('tts')
+client = Neuphonic('42ab0121289216df4abf58f9640c711ac2e1de42845bee6b1a619ffd082da9c2.ef521e59-89e4-4e1c-835c-2989af341bff')
 sse = client.tts.SSEClient()
 
 tts_config = TTSConfig(
@@ -58,34 +59,10 @@ def capture_video(display_queue, video_queue, stop_event):
                 frame = display_queue.get(timeout=0.5) # Wait briefly for a frame
                 if frame is None: # Check for sentinel value
                     break
-
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-
-                # Loop through each face found
-                #for (x, y, w, h) in faces:
-                #    # Draw rectangle around face
-                #    cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
-
-                    # Optional: Add facial recognition logic here
-                    # You could compare the face against a pre-existing dataset of faces if you want to recognize faces.
-
-                    # Draw something above the head (label)
-                #    label_text = "Face detected"
-                #    label_y = max(0, y - 20)  # ensure it's not off-screen
-
-                    # Draw a filled rectangle for label background (optional)
-                #    cv2.rectangle(frame, (x, label_y - 20), (x + w, label_y), (0, 0, 0), -1)
-
-                    # Draw label (text)
-                #    cv2.putText(frame, label_text, (x + 5, label_y - 5),
-                #                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                    
-                #    cv2.imshow("test", frame)
-
-                # Add frame to processing queue (downsize for efficiency)
+                
                 small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
                 video_queue.put(small_frame)
+
             except queue.Empty:
                 # If queue is empty, loop back and check stop_event again
                 continue
@@ -193,7 +170,7 @@ def process_media(video_queue, audio_queue, result_queue, stop_event):
                     image_data = f.read()
                 try:
                     response = model.generate_content([
-                        "Describe what you see in this image...", # Shortened for brevity
+                        "DO NOT RESPOND WITH VISUAL ANALYSIS, DESCRIBE WHAT YOU SEE, don't describe any background, just describe actions",
                         {'mime_type': 'image/jpeg', 'data': image_data}
                     ])
                     result_queue.put(f"Visual analysis: {response.text}")
@@ -347,8 +324,33 @@ def main():
 
             # Display the frame (Main Thread)
             try:
-
                 cv2.imshow("Camera Feed", frame)
+
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+                # Loop through each face found
+                """
+                for (x, y, w, h) in faces:
+                    # Draw rectangle around face
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+
+                    # Crop the detected face from the original frame
+                    face = frame[y:y + h, x:x + w]
+
+                    # Optional: Draw something above the head (label)
+                    label_text = "-1000 social credit"
+                    label_y = max(20, y - 20)  # Ensure it's not off-screen
+
+                    # Draw a filled rectangle for label background (optional)
+                    cv2.rectangle(frame, (x, label_y - 20), (x + w, label_y), (0, 0, 0), -1)
+
+                    # Draw label (text)
+                    cv2.putText(frame, label_text, (x + 5, label_y - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                    
+                    cv2.imshow('Face', face)
+                    """
+
             except cv2.error as e:
                 # Don't crash if display fails, but log it
                 print(f"Warning: cv2.imshow error: {e}")
