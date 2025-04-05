@@ -11,6 +11,17 @@ import threading
 import tempfile
 import queue
 import webrtcvad # Added for VAD
+from pyneuphonic import Neuphonic, TTSConfig
+from pyneuphonic.player import AudioPlayer
+
+
+client = Neuphonic('api-key')
+sse = client.tts.SSEClient()
+
+tts_config = TTSConfig(
+    lang_code='en',
+    sampling_rate=22050,
+)
 
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
@@ -47,31 +58,10 @@ def capture_video(display_queue, video_queue, stop_event):
                 frame = display_queue.get(timeout=0.5) # Wait briefly for a frame
                 if frame is None: # Check for sentinel value
                     break
-                
+
                 # Add frame to processing queue (downsize for efficiency)
                 small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
                 video_queue.put(small_frame)
-            
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-
-                for (x, y, w, h) in faces:
-                    # Draw rectangle around face
-                    cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
-
-                    # Draw something above the head
-                    label_text = "-10000 social credit"
-                    label_y = max(0, y - 20)  # ensure it's not off-screen
-
-                    # Draw a filled rectangle for label background (optional)
-                    cv2.rectangle(frame, (x, label_y - 20), (x + w, label_y), (0, 0, 0), -1)
-
-                    # Draw label
-                    cv2.putText(frame, label_text, (x + 5, label_y - 5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                # Only show one window now
-                cv2.imshow('Face + Above Head Drawing', frame)
-
             except queue.Empty:
                 # If queue is empty, loop back and check stop_event again
                 continue
@@ -267,6 +257,9 @@ def display_results(result_queue, stop_event):
             result = result_queue.get(timeout=0.5) # Check queue with timeout
             print("\n" + "="*50)
             print(result)
+            with AudioPlayer(sampling_rate=22050) as player:
+                response = sse.send(result, tts_config=tts_config)
+                player.play(response)
             print("="*50)
         except queue.Empty:
             # If queue is empty and stop event is set, exit the loop
@@ -330,6 +323,7 @@ def main():
 
             # Display the frame (Main Thread)
             try:
+
                 cv2.imshow("Camera Feed", frame)
             except cv2.error as e:
                 # Don't crash if display fails, but log it
