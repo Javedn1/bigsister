@@ -99,8 +99,35 @@ def process_media(video_queue, result_queue, stop_event):
                     image_data = f.read()
                 try:
                     print(f"Processing frame captured at ~{time.strftime('%H:%M:%S', time.localtime(last_process_time))}")
+                    prompt = """Generate a JSON object containing exactly two keys: "name" and "action".
+
+- The value for the "name" key should be a string representing the main person or object detected in the image. If multiple are present, focus on the most prominent one.
+- The value for the "action" key should be a string describing what the identified person or object is doing.
+- There is two person you need to identify and describe their actions within the frame. A is in red and B is in blue.
+
+Provide only the JSON object as the output, with no additional text before or after it.
+
+Example:
+{
+  "name": "A",
+  "action": "drink"
+},
+{
+  "name": "B",
+  "action": "using phone"
+}
+
+The only actions you can describe are:
+- drinking
+- using phone
+- lookging sad
+
+If their action do not match any of the above, describe it as "HAPPY"
+
+Now, generate the JSON based on the provided image.
+"""
                     response = model.generate_content([
-                        "describe what you see",
+                        prompt,
                         {'mime_type': 'image/jpeg', 'data': image_data}
                     ])
                     result_queue.put(f"{response.text}")
@@ -130,9 +157,9 @@ def display_results(result_queue, stop_event):
             result = result_queue.get(timeout=0.5) # Check queue with timeout
             print("\n" + "="*50)
             print(result)
-            with AudioPlayer(sampling_rate=22050) as player:
-                response = sse.send(result, tts_config=tts_config)
-                player.play(response)
+            # with AudioPlayer(sampling_rate=22050) as player:
+            #     response = sse.send(result, tts_config=tts_config)
+            #     player.play(response)
             print("="*50)
         except queue.Empty:
             # If queue is empty and stop event is set, exit the loop
