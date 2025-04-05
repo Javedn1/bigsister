@@ -4,13 +4,10 @@ import google.generativeai as genai
 import os
 import time
 from google.api_core.exceptions import InvalidArgument
-import pyaudio
-import wave
+import queue
 from pathlib import Path
 import threading
 import tempfile
-import queue
-import webrtcvad # Added for VAD
 from pyneuphonic import Neuphonic, TTSConfig
 from pyneuphonic.player import AudioPlayer
 
@@ -34,20 +31,8 @@ TEMP_DIR.mkdir(exist_ok=True)
 # Initialize Gemini API
 genai.configure(api_key=API_KEY)
 
-# Audio recording parameters
-CHUNK_DURATION_MS = 30  # VAD requires 10, 20, or 30 ms chunks
-FORMAT = pyaudio.paInt16
-CHANNELS = 1
-RATE = 16000
-CHUNK_SIZE = int(RATE * CHUNK_DURATION_MS / 1000)  # frames per buffer
-# RECORD_SECONDS = 5  # No longer needed for fixed segments
-VAD_AGGRESSIVENESS = 3  # 0 (least aggressive) to 3 (most aggressive)
-SILENCE_THRESHOLD_FRAMES = int(1.0 * RATE / CHUNK_SIZE) # 1 second of silence to end segment
-MIN_SPEECH_FRAMES = int(0.5 * RATE / CHUNK_SIZE) # Minimum 0.5 seconds of speech
-
 # Create queues for processing
 video_queue = queue.Queue()
-audio_queue = queue.Queue()
 result_queue = queue.Queue()
 
 # Function to capture video frames
@@ -71,83 +56,8 @@ def capture_video(display_queue, video_queue, stop_event):
         print("Capture video thread finished.")
         # Removed cap.release()
 
-# Function to record audio using VAD
-def record_audio(audio_queue, stop_event):
-    audio = pyaudio.PyAudio()
-    vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
-    
-    try: # Added try-finally for resource cleanup
-        stream = audio.open(format=FORMAT, channels=CHANNELS,
-                           rate=RATE, input=True,
-                           frames_per_buffer=CHUNK_SIZE)
-        
-        print("Listening for speech...")
-        frames_buffer = []
-        silence_counter = 0
-        is_speaking = False
-        
-        while not stop_event.is_set(): # Check stop event
-            try:
-                # Use non-blocking read with timeout to allow checking stop_event
-                data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
-            except IOError as e:
-                 # Handle input overflow gracefully if it occurs
-                 if e.errno == pyaudio.paInputOverflowed:
-                     print("Warning: Audio input overflowed. Skipping chunk.")
-                     data = None
-                 else:
-                     raise # Re-raise other IOErrors
-
-            if data is None: # Skip if overflow occurred
-                time.sleep(0.01) # Short sleep to prevent busy-waiting
-                continue
-
-            try:
-                is_speech = vad.is_speech(data, RATE)
-            except Exception as vad_error:
-                print(f"VAD Error: {vad_error}")
-                continue # Skip this chunk
-
-            if is_speech:
-                frames_buffer.append(data)
-                silence_counter = 0
-                if not is_speaking:
-                    print("Speech detected...")
-                    is_speaking = True
-            elif is_speaking:
-                frames_buffer.append(data)
-                silence_counter += 1
-                if silence_counter > SILENCE_THRESHOLD_FRAMES:
-                    print(f"Silence detected, processing segment ({len(frames_buffer) * CHUNK_DURATION_MS / 1000:.2f}s)...")
-                    if len(frames_buffer) > MIN_SPEECH_FRAMES:
-                        temp_audio_path = TEMP_DIR / f"audio_{time.time()}.wav"
-                        wf = wave.open(str(temp_audio_path), 'wb')
-                        wf.setnchannels(CHANNELS)
-                        wf.setsampwidth(audio.get_sample_size(FORMAT))
-                        wf.setframerate(RATE)
-                        wf.writeframes(b''.join(frames_buffer))
-                        wf.close()
-                        audio_queue.put(str(temp_audio_path))
-                    else:
-                        print("Segment too short, discarding.")
-                    frames_buffer = []
-                    silence_counter = 0
-                    is_speaking = False
-                    print("Listening for speech...")
-            
-            # Add a small sleep if VAD logic didn't run to prevent busy-waiting
-            # (This might not be strictly necessary with stream.read timeout)
-            # time.sleep(0.01) 
-
-    finally:
-        print("Record audio thread finished.")
-        if 'stream' in locals() and stream.is_active():
-            stream.stop_stream()
-            stream.close()
-        audio.terminate()
-
 # Function to process media with Gemini
-def process_media(video_queue, audio_queue, result_queue, stop_event):
+def process_media(video_queue, result_queue, stop_event):
     # Initialize Gemini model
     model = None # Initialize model to None
     try:
@@ -157,98 +67,60 @@ def process_media(video_queue, audio_queue, result_queue, stop_event):
         result_queue.put(f"FATAL ERROR: Could not initialize Gemini model: {model_init_error}")#
         return # Stop thread
 
+    last_process_time = time.time() - 5.0 # Process first frame immediately
+
     while not stop_event.is_set(): # Check stop event
-        processed_something = False
-        try:
-            # Check video queue with timeout
+        current_time = time.time()
+        frame_to_process = None
+        processed_frame_this_cycle = False
+
+        # Check if 5 seconds have passed
+        if current_time - last_process_time >= 5.0:
+            latest_frame = None
             try:
-                frame = video_queue.get(timeout=0.1) 
-                # --- Process frame (mostly unchanged) ---
+                # Consume all frames currently in the queue to get the latest one
+                while True:
+                    latest_frame = video_queue.get_nowait()
+            except queue.Empty:
+                pass # Keep the latest frame obtained (if any)
+
+            if latest_frame is not None:
+                frame_to_process = latest_frame
+                last_process_time = current_time # Update time only when processing
+
+        # Process the selected frame if available
+        if frame_to_process is not None:
+            processed_frame_this_cycle = True
+            try:
+                # --- Process frame ---
                 temp_img_path = TEMP_DIR / f"frame_{time.time()}.jpg"
-                cv2.imwrite(str(temp_img_path), frame)
+                cv2.imwrite(str(temp_img_path), frame_to_process) # Use frame_to_process
                 with open(temp_img_path, 'rb') as f:
                     image_data = f.read()
                 try:
+                    print(f"Processing frame captured at ~{time.strftime('%H:%M:%S', time.localtime(last_process_time))}")
                     response = model.generate_content([
-                        "DO NOT RESPOND WITH VISUAL ANALYSIS, DESCRIBE WHAT YOU SEE, don't describe any background, just describe actions",
+                        "describe what you see",
                         {'mime_type': 'image/jpeg', 'data': image_data}
                     ])
-                    result_queue.put(f"Visual analysis: {response.text}")
+                    result_queue.put(f"{response.text}")
                 except InvalidArgument as e:
                     result_queue.put(f"API Image Error: {str(e)}")
                 except Exception as e:
                     result_queue.put(f"Image Processing error: {str(e)}")
                 finally:
-                    try: 
+                    try:
                         temp_img_path.unlink()
                     except OSError as unlink_error:
                         print(f"Error deleting temp image file {temp_img_path}: {unlink_error}")
-                processed_something = True
                 # --- End frame processing ---
-            except queue.Empty:
-                pass # No frame, continue to check audio
-            
-            # Check audio queue with timeout
-            try:
-                audio_path = audio_queue.get(timeout=0.1) 
-                # --- Process audio (mostly unchanged) ---
-                try:
-                    print(f"Uploading audio file: {audio_path}")
-                    audio_file = genai.upload_file(path=audio_path)
-                    # ... (rest of audio processing, file state check, generate, delete) ...
-                    print(f"Audio file uploaded successfully: {audio_file.name}")
-                    while audio_file.state.name == "PROCESSING":
-                        # Check stop event while waiting for upload processing
-                        if stop_event.is_set(): 
-                            print("Stop event during audio upload processing.")
-                            # Attempt to clean up the uploaded file if possible
-                            try: genai.delete_file(audio_file.name)
-                            except Exception: pass 
-                            break # Exit inner loop
-                        print('.', end='')
-                        time.sleep(1)
-                        try: # Add try/except for get_file during shutdown
-                           audio_file = genai.get_file(audio_file.name)
-                        except Exception as get_file_err:
-                            print(f"\nError checking audio file status during wait: {get_file_err}")
-                            break # Exit inner loop
-                    
-                    if stop_event.is_set(): break # Exit outer loop if stopped
+            except Exception as e:
+                result_queue.put(f"General frame processing error: {str(e)}")
 
-                    if audio_file.state.name == "FAILED":
-                         raise Exception(f"Audio file processing failed: {audio_file.state.name}")
+        # Sleep briefly if no frame was processed in this cycle to avoid busy-waiting
+        if not processed_frame_this_cycle:
+            time.sleep(0.1) # Check again in 100ms
 
-                    print(f"\nGenerating content for audio: {audio_file.name}")
-                    response = model.generate_content([
-                        "Transcribe and summarize what is being said in this audio.",
-                        audio_file
-                    ])
-                    result_queue.put(f"Audio analysis: {response.text}")
-                    genai.delete_file(audio_file.name)
-                    print(f"Deleted uploaded file: {audio_file.name}")
-                except InvalidArgument as e:
-                    result_queue.put(f"API Audio Error: {str(e)}")
-                except Exception as e:
-                    result_queue.put(f"Audio Processing error: {str(e)}")
-                finally:
-                    try: 
-                        Path(audio_path).unlink()
-                        print(f"Deleted local temp file: {audio_path}")
-                    except OSError as unlink_error:
-                        print(f"Error deleting temp audio file {audio_path}: {unlink_error}")
-                processed_something = True
-                # --- End audio processing ---
-            except queue.Empty:
-                pass # No audio, continue
-            
-            # If neither queue had data, sleep briefly to prevent busy-waiting
-            if not processed_something:
-                time.sleep(0.1)
-            
-        except Exception as e:
-            result_queue.put(f"General processing loop error: {str(e)}")
-            time.sleep(1) 
-    
     print("Process media thread finished.")
 
 # Function to display results
@@ -310,8 +182,7 @@ def main():
     # Start threads
     threads = [
         threading.Thread(target=capture_video, args=(display_queue, video_queue, stop_event), daemon=True),
-        threading.Thread(target=record_audio, args=(audio_queue, stop_event), daemon=True),
-        threading.Thread(target=process_media, args=(video_queue, audio_queue, result_queue, stop_event), daemon=True),
+        threading.Thread(target=process_media, args=(video_queue, result_queue, stop_event), daemon=True),
         threading.Thread(target=display_results, args=(result_queue, stop_event), daemon=True)
     ]
     
