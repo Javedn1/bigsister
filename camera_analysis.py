@@ -17,6 +17,8 @@ import pygame
 pygame.mixer.init()
 ding = pygame.mixer.Sound("ding.wav")
 import time
+from playsound import playsound
+
 
 client = Neuphonic('42ab0121289216df4abf58f9640c711ac2e1de42845bee6b1a619ffd082da9c2.ef521e59-89e4-4e1c-835c-2989af341bff')
 
@@ -114,7 +116,7 @@ def process_media(video_queue, result_queue, stop_event):
                     prompt = """Generate a JSON object containing exactly two keys: "name" and "action".
 
 - The value for the "name" key should be a string representing the main person or object detected in the image. If multiple are present, focus on the most prominent one.
-- Use the name above the person's head for the name
+- Use the name above the person's head for the name, it should be like Person x, where x is an integer, do not include anything else
 - The value for the "action" key should be a string describing what the identified person or object is doing.
 - There is two person you need to identify and describe their actions within the frame. A is in red and B is in blue.
 
@@ -328,14 +330,10 @@ def main():
                         # Determine which icon key to use based on score
                         icon_key = 'gold' # Default
                         if score <= 300:
-                            ding.play(-1)
                             icon_key = 'silver'
                         elif score >= 700:
-                            icon_key = 'diamond'
-                            ding.play(-1)
+                            icon_key = 'diamond'                    
                         
-                        #pygame.time.wait(2000)
-                        ding.stop()
 
                         # Get the corresponding pre-resized image
                         selected_overlay = overlay_images.get(icon_key)
