@@ -12,6 +12,12 @@ from pyneuphonic import Neuphonic, TTSConfig
 from pyneuphonic.player import AudioPlayer
 import json
 
+
+import pygame
+pygame.mixer.init()
+ding = pygame.mixer.Sound("ding.wav")
+import time
+
 client = Neuphonic('42ab0121289216df4abf58f9640c711ac2e1de42845bee6b1a619ffd082da9c2.ef521e59-89e4-4e1c-835c-2989af341bff')
 
 sse = client.tts.SSEClient()
@@ -164,7 +170,6 @@ Now, generate the JSON based on the provided image.
 def talk(text):
     try:
         if(text):
-            print("HERERE")
             text = text.strip("```json\n").strip("```")
             data = json.loads(text)
             message = ""
@@ -173,6 +178,7 @@ def talk(text):
                 action = entry.get("action")
                 if(action == "drinking"):
                     message = "keep drinking!"
+                    print("CAN'T PUT DOWN THE CUPT")
                     social_score[name] += 100
                 if(action == "using phone"):
                     message = "stop using your phone!"
@@ -185,7 +191,7 @@ def talk(text):
                     social_score[name] -=100
 
 
-            with AudioPlayer(sampling_rate=22050) as player:
+                with AudioPlayer(sampling_rate=22050) as player:
                     response = sse.send(message, tts_config=tts_config)
                     player.play(response)
 
@@ -322,9 +328,14 @@ def main():
                         # Determine which icon key to use based on score
                         icon_key = 'gold' # Default
                         if score <= 300:
+                            ding.play(-1)
                             icon_key = 'silver'
                         elif score >= 700:
                             icon_key = 'diamond'
+                            ding.play(-1)
+                        
+                        #pygame.time.wait(2000)
+                        ding.stop()
 
                         # Get the corresponding pre-resized image
                         selected_overlay = overlay_images.get(icon_key)
