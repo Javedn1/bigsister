@@ -33,8 +33,10 @@ face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fronta
 
 social_score = {}
 
+# Initialize with just the score
+STARTING_SCORE = 500
 for i in range(10):
-    social_score[f"Person {i}"] = 500
+    social_score[f"Person {i+1}"] = STARTING_SCORE # Use Person 1, Person 2 etc.
 
 
 # Configuration
@@ -126,7 +128,7 @@ Example:
 [
     {
         "name": "Person x",
-        "action": "drink"
+        "action": "drinking water"
     },
     {
         "name": "Person y",
@@ -136,12 +138,15 @@ Example:
 
 This is an example if there is two people on camera
 The only actions you can describe are:
-- drinking
+- drinking water
 - using phone
 - looking sad
 - smoking
+- looking happy
+- drinking coke
 
-If their action do not match any of the above, describe it as "HAPPY"
+**if the person is drinking from a black bottle, describe it as "drinking coke"**
+If their action do not match any of the above, describe it as "neutral"
 
 Now, generate the JSON based on the provided image.
 """
@@ -178,28 +183,49 @@ def talk(text):
             for entry in data:
                 name = entry.get("name")
                 action = entry.get("action")
-                if(action == "drinking"):
-                    message = "keep drinking!"
-                    print("CAN'T PUT DOWN THE CUPT")
-                    social_score[name] += 100
-                if(action == "using phone"):
-                    message = "stop using your phone!"
-                    social_score[name] -= 100
-                if(action == "looking sad"):
-                    message = "stop looking sad!"
-                    social_score[name] -= 100
-                if(action == "smoking"):
-                    message = "stop smoking!"
-                    social_score[name] -=100
 
+                # --- Update score directly --- (No status here)
+                if name in social_score: # Check if person exists
+                    if(action == "drinking water"):
+                        message = "keep drinking!"
+                        social_score[name] += 100
+                    elif(action == "using phone"):
+                        message = "stop using your phone!"
+                        social_score[name] -= 100
+                    elif(action == "looking sad"):
+                        message = "stop looking sad!"
+                        social_score[name] -= 100
+                    elif(action == "smoking"):
+                        message = "stop smoking!"
+                        social_score[name] -= 100
+                    elif(action == "looking happy"):
+                        message = "You have a nice smile!"
+                        social_score[name] += 100
+                    elif(action == "drinking coke"):
+                        message = "stop drinking coke!"
+                        social_score[name] -= 100
+                    # Ensure score doesn't go below 0 (optional)
+                    # social_score[name] = max(0, social_score[name])
+                else:
+                     print(f"Warning: Person '{name}' from Gemini not found in social_score.")
+                     continue # Skip processing this entry if name is invalid
+                # --- End score update ---
 
-                with AudioPlayer(sampling_rate=22050) as player:
-                    response = sse.send(message, tts_config=tts_config)
-                    player.play(response)
+                # Play TTS message if one was set
+                if message:
+                    with AudioPlayer(sampling_rate=22050) as player:
+                        response = sse.send(message, tts_config=tts_config)
+                        player.play(response)
+                message = "" # Reset message for next entry
 
+    except json.JSONDecodeError as json_err:
+        print(f"Error decoding JSON in talk function: {json_err}")
+        print(f"Received text: {text}")
+    except KeyError as key_err:
+         print(f"KeyError in talk function (likely accessing social_score['{name}']): {key_err}")
     except Exception as e:
-        print(str(e))
-    
+        print(f"General error in talk function: {str(e)}")
+
 
 # Function to display results
 def display_results(result_queue, stop_event):
@@ -287,6 +313,8 @@ def main():
         print("Error: Could not open camera.")
         return
 
+    previous_scores = {} # Dictionary to store scores from the previous frame check
+
     # Start threads
     threads = [
         threading.Thread(target=capture_video, args=(display_queue, video_queue, stop_event), daemon=True),
@@ -312,15 +340,40 @@ def main():
 
                 faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
+                # Keep track of persons seen this frame to update previous_scores later
+                persons_seen_this_frame = set()
+
                 for idx, (x, y, w, h) in enumerate(faces):
                     # Draw rectangle around face
                     cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
 
                     person_id = f"Person {idx+1}"
-                    score = social_score.get(person_id, 500) # Get score, default 500 if not found
+                    persons_seen_this_frame.add(person_id)
+
+                    # Get current score, defaulting if necessary
+                    current_score = social_score.get(person_id, STARTING_SCORE)
+
+                    # Get previous score, defaulting if first time seeing this person
+                    prev_score = previous_scores.get(person_id, STARTING_SCORE)
+
+                    # --- Play ding only on threshold crossing --- 
+                    play_ding_sound = False
+                    if current_score <= 300 and prev_score > 300:
+                        print(f"{person_id} crossed below 300 threshold.")
+                        play_ding_sound = True
+                    elif current_score >= 700 and prev_score < 700:
+                        print(f"{person_id} crossed above 700 threshold.")
+                        play_ding_sound = True
+
+                    if play_ding_sound:
+                        try:
+                            ding.play(maxtime=200) # Play the ding
+                        except Exception as ding_err:
+                             print(f"Error playing ding sound: {ding_err}")
+                    # --- End ding logic ---
 
                     # Draw label text
-                    label_text = f"{person_id}: {score}BS cred"
+                    label_text = f"{person_id}: {current_score} BS cred"
                     label_y = max(20, y - 20)
                     cv2.rectangle(frame, (x, label_y - 20), (x + w, label_y), (0, 0, 0), -1)
                     cv2.putText(frame, label_text, (x + 5, label_y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
@@ -329,12 +382,12 @@ def main():
                     if any_overlay_loaded:
                         # Determine which icon key to use based on score
                         icon_key = 'gold' # Default
-                        if score <= 300:
+                        if current_score <= 300:
                             icon_key = 'silver'
-                        elif score >= 700:
-                            icon_key = 'diamond'                    
-                        
+                        elif current_score >= 700:
+                            icon_key = 'diamond'
 
+                                            
                         # Get the corresponding pre-resized image
                         selected_overlay = overlay_images.get(icon_key)
 
@@ -357,6 +410,10 @@ def main():
                             except Exception as e:
                                 print(f"Warning: Error applying conditional overlay for '{icon_key}': {e}")
                     # --- End conditional image overlay ---
+
+                # Update previous scores *after* processing all faces for this frame
+                for p_id in persons_seen_this_frame:
+                    previous_scores[p_id] = social_score.get(p_id, STARTING_SCORE)
 
                 cv2.imshow("Face", frame)
                     
