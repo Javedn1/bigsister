@@ -12,8 +12,6 @@ from pyneuphonic import Neuphonic, TTSConfig
 from pyneuphonic.player import AudioPlayer
 import json
 
-import face_recognition
-
 client = Neuphonic('42ab0121289216df4abf58f9640c711ac2e1de42845bee6b1a619ffd082da9c2.ef521e59-89e4-4e1c-835c-2989af341bff')
 
 sse = client.tts.SSEClient()
@@ -26,19 +24,10 @@ tts_config = TTSConfig(
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
 social_score = {}
-social_score['blue'] = 100
-social_score['red'] = 100
 
-image_of_person  = face_recognition.load_image_file("marcus.jpg")
-marcus_encoding = face_recognition.face_encodings(image_of_person)[0]
+for i in range(10):
+    social_score[f"Person {i}"] = 500
 
-known_face_encodings = [marcus_encoding]
-konwn_face_names = ["Marcus"]
-
-
-
-BLUE_ON_SCREEN = False
-RED_ON_SCREEN = False
 
 # Configuration
 API_KEY = os.environ.get("GOOGLE_API_KEY")  # Set your API key as an environment variable
@@ -119,7 +108,7 @@ def process_media(video_queue, result_queue, stop_event):
                     prompt = """Generate a JSON object containing exactly two keys: "name" and "action".
 
 - The value for the "name" key should be a string representing the main person or object detected in the image. If multiple are present, focus on the most prominent one.
-- Use the primary of what the person is wearing for now e.g blue, red
+- Use the name above the person's head for the name
 - The value for the "action" key should be a string describing what the identified person or object is doing.
 - There is two person you need to identify and describe their actions within the frame. A is in red and B is in blue.
 
@@ -128,11 +117,11 @@ Provide only the JSON object as the output, with no additional text before or af
 Example:
 [
     {
-        "name": "blue",
+        "name": "Person x",
         "action": "drink"
     },
     {
-        "name": "red",
+        "name": "Person y",
         "action": "using phone"
     }
 ]
@@ -142,6 +131,7 @@ The only actions you can describe are:
 - drinking
 - using phone
 - looking sad
+- smoking
 
 If their action do not match any of the above, describe it as "HAPPY"
 
@@ -181,20 +171,19 @@ def talk(text):
             for entry in data:
                 name = entry.get("name")
                 action = entry.get("action")
-                if(name == "blue" or name == "red"):
-                    if(action == "drinking"):
-                        message = "stop drinking!"
-                        social_score[name] -= 10
-                    if(action == "using phone"):
-                        message = "stop using your phone!"
-                        social_score[name] -= 10
-                    if(action == "looking sad"):
-                        message = "stop looking sad"
-                        social_score[name] -= 10
-                    if(name == "blue"):
-                        BLUE_ON_SCREEN = True
-                    if(name == "red"):
-                        RED_ON_SCREEN = True
+                if(action == "drinking"):
+                    message = "stop drinking!"
+                    social_score[name] -= 10
+                if(action == "using phone"):
+                    message = "stop using your phone!"
+                    social_score[name] -= 10
+                if(action == "looking sad"):
+                    message = "stop looking sad!"
+                    social_score[name] -= 10
+                if(action == "smoking"):
+                    message = "stop smoking!"
+
+
             with AudioPlayer(sampling_rate=22050) as player:
                     response = sse.send(message, tts_config=tts_config)
                     player.play(response)
@@ -286,7 +275,7 @@ def main():
                 faces = face_cascade.detectMultiScale(gray, 1.3, 5)
                 # Loop through each face found
                 
-                for (x, y, w, h) in faces:
+                for idx, (x, y, w, h) in enumerate(faces):
                     # Draw rectangle around face
                     cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
 
@@ -294,7 +283,8 @@ def main():
                     face = frame[y:y + h, x:x + w]
 
                     # Optional: Draw something above the head (label)
-                    label_text = str(social_score["blue"])
+                    #label_text = str(social_score["blue"])
+                    label_text = f"Person {idx+1}: {social_score['Person ' + str(idx+1)]}"
                     label_y = max(20, y - 20)  # Ensure it's not off-screen
 
                     # Draw a filled rectangle for label background (optional)
