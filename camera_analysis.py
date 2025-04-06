@@ -172,16 +172,17 @@ def talk(text):
                 name = entry.get("name")
                 action = entry.get("action")
                 if(action == "drinking"):
-                    message = "stop drinking!"
-                    social_score[name] -= 10
+                    message = "keep drinking!"
+                    social_score[name] += 100
                 if(action == "using phone"):
                     message = "stop using your phone!"
-                    social_score[name] -= 10
+                    social_score[name] -= 100
                 if(action == "looking sad"):
                     message = "stop looking sad!"
-                    social_score[name] -= 10
+                    social_score[name] -= 100
                 if(action == "smoking"):
                     message = "stop smoking!"
+                    social_score[name] -=100
 
 
             with AudioPlayer(sampling_rate=22050) as player:
@@ -232,6 +233,36 @@ def main():
         print("Error: Google API Key not found. Please set the GOOGLE_API_KEY environment variable.")
         return
     
+    # --- Overlay Setup ---
+    overlay_images = {} # Dictionary to hold resized overlay images
+    overlay_w, overlay_h = 60, 60 # Fixed overlay size
+    icon_paths = {
+        'diamond': 'assets/diamond.png',
+        'gold': 'assets/gold.png',
+        'silver': 'assets/silver.png'
+    }
+
+    for key, path in icon_paths.items():
+        try:
+            img = cv2.imread(path, cv2.IMREAD_COLOR)
+            if img is None:
+                print(f"Warning: Could not load overlay image '{path}' for '{key}'. Skipping this icon.")
+                overlay_images[key] = None # Store None if loading failed
+            else:
+                resized_img = cv2.resize(img, (overlay_w, overlay_h), interpolation=cv2.INTER_AREA)
+                overlay_images[key] = resized_img
+                print(f"Successfully loaded and resized '{path}' for '{key}'.")
+        except Exception as e:
+            print(f"Warning: Error loading/resizing overlay image '{path}' for '{key}': {e}. Skipping this icon.")
+            overlay_images[key] = None # Store None on error
+
+    # Check if at least one overlay loaded successfully
+    any_overlay_loaded = any(img is not None for img in overlay_images.values())
+    if not any_overlay_loaded:
+        print("Warning: No overlay icons could be loaded. Overlay feature disabled.")
+
+    # --- End Overlay Setup ---
+
     #train_recognizer()
     #recognizer.read('face_trainer.yml')
     
@@ -268,32 +299,56 @@ def main():
 
             # Display the frame (Main Thread)
             try:
-                #cv2.imshow("Camera Feed", frame)
-
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                frame_h, frame_w = frame.shape[:2]
 
                 faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-                # Loop through each face found
-                
+
                 for idx, (x, y, w, h) in enumerate(faces):
                     # Draw rectangle around face
                     cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
 
-                    # Crop the detected face from the original frame
-                    face = frame[y:y + h, x:x + w]
+                    person_id = f"Person {idx+1}"
+                    score = social_score.get(person_id, 500) # Get score, default 500 if not found
 
-                    # Optional: Draw something above the head (label)
-                    #label_text = str(social_score["blue"])
-                    label_text = f"Person {idx+1}: {social_score['Person ' + str(idx+1)]}"
-                    label_y = max(20, y - 20)  # Ensure it's not off-screen
-
-                    # Draw a filled rectangle for label background (optional)
+                    # Draw label text
+                    label_text = f"{person_id}: {score}BS cred"
+                    label_y = max(20, y - 20)
                     cv2.rectangle(frame, (x, label_y - 20), (x + w, label_y), (0, 0, 0), -1)
+                    cv2.putText(frame, label_text, (x + 5, label_y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-                    # Draw label (text)
-                    cv2.putText(frame, label_text, (x + 5, label_y - 5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                    
+                    # --- Conditional image overlay ---
+                    if any_overlay_loaded:
+                        # Determine which icon key to use based on score
+                        icon_key = 'gold' # Default
+                        if score <= 300:
+                            icon_key = 'silver'
+                        elif score >= 700:
+                            icon_key = 'diamond'
+
+                        # Get the corresponding pre-resized image
+                        selected_overlay = overlay_images.get(icon_key)
+
+                        if selected_overlay is not None:
+                            try:
+                                # Calculate position (same as before)
+                                offset_x = 5
+                                overlay_x_start = x + w + offset_x
+                                overlay_y_start = y
+                                overlay_x_end = overlay_x_start + overlay_w
+                                overlay_y_end = overlay_y_start + overlay_h
+
+                                # Basic boundary check (same as before)
+                                if (overlay_y_start >= 0 and overlay_y_end <= frame_h and
+                                    overlay_x_start >= 0 and overlay_x_end <= frame_w):
+
+                                    # Copy the *selected* overlay onto the frame ROI
+                                    frame[overlay_y_start:overlay_y_end, overlay_x_start:overlay_x_end] = selected_overlay
+
+                            except Exception as e:
+                                print(f"Warning: Error applying conditional overlay for '{icon_key}': {e}")
+                    # --- End conditional image overlay ---
+
                 cv2.imshow("Face", frame)
                     
                     
