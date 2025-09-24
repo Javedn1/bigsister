@@ -1,3 +1,14 @@
+from gtts import gTTS
+import os
+import tempfile
+
+def speak(text, lang="en"):
+    """Convert text to speech using gTTS and play it."""
+    tts = gTTS(text=text, lang=lang)
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".mp3") as fp:
+        filename = fp.name
+        tts.save(filename)
+        os.system(f"mpg123 {filename} > /dev/null 2>&1")  # or 'afplay' on macOS
 import cv2
 import numpy as np
 import google.generativeai as genai
@@ -8,8 +19,8 @@ import queue
 from pathlib import Path
 import threading
 import tempfile
-from pyneuphonic import Neuphonic, TTSConfig
-from pyneuphonic.player import AudioPlayer
+'''from pyneuphonic import Neuphonic, TTSConfig
+from pyneuphonic.player import AudioPlayer'''
 import json
 
 
